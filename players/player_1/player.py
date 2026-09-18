@@ -14,6 +14,8 @@ This directory is not itself discovered - the registry only matches
 """
 
 from itertools import combinations
+import numpy as np
+import os
 
 from models.player import GameContext, PlayerSnapshot, Selection, TurnContext
 from models.player import Player as BasePlayer
@@ -105,19 +107,55 @@ class Player1(BasePlayer):
 		# Replace everything below with your strategy. This baseline wears the
 		# first two socks it is handed and never discards, which is the
 		# do-nothing behaviour a real strategy should beat.
-		is_white = [int(sock >= 127) for sock in offered]
-		num_white = sum(is_white)
+		# is_white = [int(sock >= 127) for sock in offered]
+		# num_white = sum(is_white)
 
-		if num_white == 2:
-			black_indices = []
-			for index, val in enumerate(is_white):
-				if val == 0:
-					black_indices.append(index)
-			i, j = black_indices[0], black_indices[1]
-		else:
-			i, j = min(
-				combinations(range(len(offered)), 2),
-				key=lambda p: abs(offered[p[0]] - offered[p[1]]),
-			)
+		# if num_white == 2:
+		# 	black_indices = []
+		# 	for index, val in enumerate(is_white):
+		# 		if val == 0:
+		# 			black_indices.append(index)
+		# 	i, j = black_indices[0], black_indices[1]
+		# else:
+		i, j = min(
+			combinations(range(len(offered)), 2),
+			key=lambda p: abs(offered[p[0]] - offered[p[1]]),
+		)
+		wear = [i, j]
 
-		return Selection(wear=(i, j), discard=())
+		threshold = self.choose_discard_threshold(turn)
+		discard = []
+		for c in range(len(offered)):
+			if c not in wear and offered[c] >= threshold and offered[c] <= (255 - threshold * 2):
+				discard.append(c)
+
+		return Selection(wear=(i, j), discard=tuple(discard))
+
+	def choose_discard_threshold(self, turn: TurnContext) -> float:
+		budget = turn.budget_remaining
+		days_left = float(self.days - turn.day)
+		
+		## 10
+		# 100 dollars, 4 people, capacity 40, 118 days
+		# 100 dollars, 6 people, capacity 40, 76 days
+		# 100 dollars, 2 people, capacity 40, 223 days
+		# 100 dollars, 4 people, capacity 80, 140 days
+		# 100 dollars, 8 people, capacity 80, 71 days
+		# 200 dollars, 4 people, capacity 40, 190 days
+		# 200 dollars, 6 people, capacity 40, 131 days
+		# 200 dollars, 2 people, capacity 40, 386 days
+		# 200 dollars, 4 people, capacity 80, 216 days
+		# 200 dollars, 8 people, capacity 80, 110 days
+
+		## 20
+		# 100 dollars, 4 people, capacity 40, 223 days
+		# 100 dollars, 6 people, capacity 40, 145 days
+		# 100 dollars, 2 people, capacity 40, 448 days
+		# 100 dollars, 4 people, capacity 80, 255 days
+		# 100 dollars, 8 people, capacity 80, 138 days
+		# 200 dollars, 4 people, capacity 40, 384 days
+		threshold = -4.97209432 + -0.04881998 * budget + -0.0412379 * self.capacity + 3.08504753 * self.roommates + 0.05836028 * days_left
+
+		correction = 2
+
+		return (threshold if threshold > 6 else 6) + correction

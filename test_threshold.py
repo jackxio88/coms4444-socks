@@ -85,7 +85,7 @@ def run_experiments():
                results, 
                fmt="%.2f", 
                delimiter=",",
-               header="capacity,budget,days,total_embarrassment,budget_exhausted_on_day,total_sockless_days",
+               header="capacity,budget,roomates,duration,total_embarrassment,budget_exhausted_on_day,total_sockless_days",
             )
 
 run_experiments()

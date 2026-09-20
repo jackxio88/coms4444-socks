@@ -147,4 +147,3 @@ class Player1(BasePlayer):
 			self.threshold =  max(
 				5 * self.roommates * days_left / budget,
 				self.MIN_THRESHOLD)
-			print(f"threshold on day {turn.day} updated to {self.threshold}")

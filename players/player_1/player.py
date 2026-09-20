@@ -39,7 +39,10 @@ class Player1(BasePlayer):
 		# The engine constructs you once, before day 1, and it constructs you
 		# itself - you cannot preload state into an already-built object. Anything
 		# you want to carry between days lives on self, so initialise it here.
-		self.days_seen = 0
+
+		self.MIN_THRESHOLD = 6
+		self.MAX_THRESHOLD = 127
+		self.STATIC_THRESHOLD = self.MIN_THRESHOLD
 
 	def select_socks(self, offered: tuple[int, ...], turn: TurnContext) -> Selection:
 		"""Choose two socks to wear, and decide the fate of the rest.
@@ -102,7 +105,6 @@ class Player1(BasePlayer):
 		forfeit is visible rather than silent. Your failure never affects the
 		other groups.
 		"""
-		self.days_seen += 1
 
 		# Replace everything below with your strategy. This baseline wears the
 		# first two socks it is handed and never discards, which is the
@@ -123,7 +125,10 @@ class Player1(BasePlayer):
 		)
 		wear = [i, j]
 
-		threshold = self.choose_discard_threshold(turn)
+		# calcualte threshold and discard 
+		# if no budget left, no discard happens
+		threshold = self.get_dynamic_threshold(turn)
+
 		discard = []
 		for c in range(len(offered)):
 			if c not in wear and offered[c] >= threshold and offered[c] <= (255 - threshold * 2):
@@ -131,31 +136,17 @@ class Player1(BasePlayer):
 
 		return Selection(wear=(i, j), discard=tuple(discard))
 
-	def choose_discard_threshold(self, turn: TurnContext) -> float:
+	def get_dynamic_threshold(self, turn: TurnContext) -> float:
 		budget = turn.budget_remaining
 		days_left = float(self.days - turn.day)
+
+		if budget == 0:
+			# no discard happens if no budget left
+			threshold = self.MAX_THRESHOLD
+		else:
+			# threshold calculated with remaining days and budget
+			# x = 5nT/B
+			threshold =  5 * self.roommates * days_left / budget
 		
-		## 10
-		# 100 dollars, 4 people, capacity 40, 118 days
-		# 100 dollars, 6 people, capacity 40, 76 days
-		# 100 dollars, 2 people, capacity 40, 223 days
-		# 100 dollars, 4 people, capacity 80, 140 days
-		# 100 dollars, 8 people, capacity 80, 71 days
-		# 200 dollars, 4 people, capacity 40, 190 days
-		# 200 dollars, 6 people, capacity 40, 131 days
-		# 200 dollars, 2 people, capacity 40, 386 days
-		# 200 dollars, 4 people, capacity 80, 216 days
-		# 200 dollars, 8 people, capacity 80, 110 days
-
-		## 20
-		# 100 dollars, 4 people, capacity 40, 223 days
-		# 100 dollars, 6 people, capacity 40, 145 days
-		# 100 dollars, 2 people, capacity 40, 448 days
-		# 100 dollars, 4 people, capacity 80, 255 days
-		# 100 dollars, 8 people, capacity 80, 138 days
-		# 200 dollars, 4 people, capacity 40, 384 days
-		threshold = -4.97209432 + -0.04881998 * budget + -0.0412379 * self.capacity + 3.08504753 * self.roommates + 0.05836028 * days_left
-
-		correction = 2
-
-		return (threshold if threshold > 6 else 6) + correction
+		print(f"threshold on day {self.days} is {threshold}")
+		return max(threshold, self.MIN_THRESHOLD)

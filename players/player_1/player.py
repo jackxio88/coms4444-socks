@@ -41,8 +41,7 @@ class Player1(BasePlayer):
 		# you want to carry between days lives on self, so initialise it here.
 
 		self.MIN_THRESHOLD = 6
-		self.MAX_THRESHOLD = 127
-		self.STATIC_THRESHOLD = self.MIN_THRESHOLD
+		self.threshold = self.MIN_THRESHOLD
 
 	def select_socks(self, offered: tuple[int, ...], turn: TurnContext) -> Selection:
 		"""Choose two socks to wear, and decide the fate of the rest.
@@ -127,26 +126,25 @@ class Player1(BasePlayer):
 
 		# calcualte threshold and discard 
 		# if no budget left, no discard happens
-		threshold = self.get_dynamic_threshold(turn)
+		self.set_dynamic_threshold(turn)
 
 		discard = []
 		for c in range(len(offered)):
-			if c not in wear and offered[c] >= threshold and offered[c] <= (255 - threshold * 2):
+			if c not in wear and offered[c] >= self.threshold and offered[c] <= 255 - self.threshold:
 				discard.append(c)
 
 		return Selection(wear=(i, j), discard=tuple(discard))
 
-	def get_dynamic_threshold(self, turn: TurnContext) -> float:
+	# update the thresold based on days and budget remaining
+	# threshold here is on the shade of sock instead of days worn
+	# x = 5nT/B
+	# if no budget left, threshold remains the same
+	def set_dynamic_threshold(self, turn: TurnContext):
 		budget = turn.budget_remaining
 		days_left = float(self.days - turn.day)
 
-		if budget == 0:
-			# no discard happens if no budget left
-			threshold = self.MAX_THRESHOLD
-		else:
-			# threshold calculated with remaining days and budget
-			# x = 5nT/B
-			threshold =  5 * self.roommates * days_left / budget
-		
-		print(f"threshold on day {self.days} is {threshold}")
-		return max(threshold, self.MIN_THRESHOLD)
+		if budget != 0:
+			self.threshold =  max(
+				5 * self.roommates * days_left / budget,
+				self.MIN_THRESHOLD)
+			print(f"threshold on day {turn.day} updated to {self.threshold}")

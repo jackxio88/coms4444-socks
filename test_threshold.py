@@ -35,8 +35,9 @@ def run_simulation(args):
 
         run_result = [
             engine_result["total_embarrassment"],
-            engine_result["budget_exhausted_on_day"] or -1, # this is none when not exhausted
             engine_result["total_sockless_days"],
+            engine_result["budget_exhausted_on_day"] or -1, # this is none when not exhausted
+            engine_result["budget_remaining"],
         ]
     finally:
         if log is not None:
@@ -85,7 +86,7 @@ def run_experiments():
                results, 
                fmt="%.2f", 
                delimiter=",",
-               header="capacity,budget,roomates,duration,total_embarrassment,budget_exhausted_on_day,total_sockless_days",
+               header="capacity,budget,roomates,duration,total_embarrassment,total_sockless_days,budget_exhausted_on,budget_remaining",
             )
 
 run_experiments()

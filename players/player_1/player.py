@@ -13,10 +13,17 @@ This directory is not itself discovered - the registry only matches
 ``player_<digits>`` - so the template can never appear in a run as a competitor.
 """
 
-import numpy as np
-
 from models.player import GameContext, PlayerSnapshot, Selection, TurnContext
 from models.player import Player as BasePlayer
+
+# Wears a sock lasts: black stops rising at 64, white stops fading at 127 (64 wears of 2).
+LIFETIME = 64
+PACK_COST = 10.0
+PACK_SIZE = 6
+# Lowest useful threshold: a pair differing by 6 or less is free, so don't discard newer.
+FLOOR = 6.0
+# Above the 64-wear maximum, so nothing qualifies.
+NEVER = 65.0
 
 
 class Player1(BasePlayer):
@@ -113,14 +120,19 @@ class Player1(BasePlayer):
 		# Can somehow use num_bought to widen range
 		self.previous_budget = turn.budget_remaining
 
-		black_socks = np.array(offered)[np.where(np.array(offered) <= 64)].astype(np.float64)
-		self.black_avg, self.black_range = self.estimate_age(
-			black_socks, self.black_avg, self.black_range, 1
-		)
-		white_socks = np.array(offered)[np.where(np.array(offered) >= 127)].astype(np.float64)
-		self.white_avg, self.white_range = self.estimate_age(
-			white_socks, self.white_avg, self.white_range, -2
-		)
+		# black_socks = np.array(offered)[np.where(np.array(offered) <= 64)].astype(np.float64)
+		# self.black_avg, self.black_range = self.estimate_age(
+		# 	black_socks, self.black_avg, self.black_range, 1
+		# )
+		# white_socks = np.array(offered)[np.where(np.array(offered) >= 127)].astype(np.float64)
+		# self.white_avg, self.white_range = self.estimate_age(
+		# 	white_socks, self.white_avg, self.white_range, -2
+		# )
+
+		# Today's hand is a random sample of the drawer, so its average wears left,
+		# scaled up to the drawer, is a rough reading of the whole drawer's runway.
+		wears_left_per_sock = sum(LIFETIME - self._wears(s) for s in offered) / len(offered)
+		self.runway = wears_left_per_sock * self.capacity
 
 		# if offered = [0, 1, 255, 253]
 		# then wear_scores = [0, 1, 0, 1]
@@ -161,31 +173,31 @@ class Player1(BasePlayer):
 			return self.total_budget == turn.budget_remaining
 		return False
 
-	def estimate_age(self, colored_socks, previous_age, previous_range, multiplier):
-		# Estimate roommates (-1 because we did not pick color) * 2 (pick 2) / 2 (assume half pick each color) / half-capacity (population of each color)
-		picked_by_roommates = (self.roommates - 1) * 2 / 2
-		half_capacity = self.capacity / 2
-		roommate_aging = multiplier * picked_by_roommates / half_capacity
-		if colored_socks.size > 0:
-			mean = colored_socks.mean()
-			range = colored_socks.max() - colored_socks.min()
-			# For range, if larger range observed, then set. If not, then average ranges to try to decay towards observations
-			if range > previous_range:
-				range_update = range
-			else:
-				range_update = (
-					previous_range * (half_capacity - colored_socks.size) / half_capacity
-					+ range * colored_socks.size / half_capacity
-				)
+	# def estimate_age(self, colored_socks, previous_age, previous_range, multiplier):
+	# 	# Estimate roommates (-1 because we did not pick color) * 2 (pick 2) / 2 (assume half pick each color) / half-capacity (population of each color)
+	# 	picked_by_roommates = (self.roommates - 1) * 2 / 2
+	# 	half_capacity = self.capacity / 2
+	# 	roommate_aging = multiplier * picked_by_roommates / half_capacity
+	# 	if colored_socks.size > 0:
+	# 		mean = colored_socks.mean()
+	# 		range = colored_socks.max() - colored_socks.min()
+	# 		# For range, if larger range observed, then set. If not, then average ranges to try to decay towards observations
+	# 		if range > previous_range:
+	# 			range_update = range
+	# 		else:
+	# 			range_update = (
+	# 				previous_range * (half_capacity - colored_socks.size) / half_capacity
+	# 				+ range * colored_socks.size / half_capacity
+	# 			)
 
-			observed_age = mean * colored_socks.size / half_capacity
-			previous_observed_age = (
-				previous_age * (half_capacity - colored_socks.size) / half_capacity
-			)
-			# Take weighted average between observed and previous observed aged and add rommmates choice
-			return previous_observed_age + observed_age + roommate_aging, range_update
-		else:
-			return previous_age + roommate_aging, previous_range
+	# 		observed_age = mean * colored_socks.size / half_capacity
+	# 		previous_observed_age = (
+	# 			previous_age * (half_capacity - colored_socks.size) / half_capacity
+	# 		)
+	# 		# Take weighted average between observed and previous observed aged and add rommmates choice
+	# 		return previous_observed_age + observed_age + roommate_aging, range_update
+	# 	else:
+	# 		return previous_age + roommate_aging, previous_range
 
 	def select_pair(
 		self, by_shade: list[tuple[int, int]], wear_scores: list[float]
@@ -238,11 +250,14 @@ class Player1(BasePlayer):
 		return Selection(wear=pair)
 
 	def choose_discard_threshold(self, turn: TurnContext) -> float:
-		days_left = float(self.days - turn.day)
+		if turn.budget_remaining == float('inf'):
+			return FLOOR
+		buyable = (turn.budget_remaining // PACK_COST) * PACK_SIZE
+		need = 2 * self.roommates * (self.days - turn.day)
+		need += 0.25 * need  # account for 25% chance of holes in worn socks
+		surplus = self.runway + LIFETIME * buyable - need
+		threshold = LIFETIME - surplus / (self.capacity + buyable)
 
-		threshold = (
-			5.0 * self.roommates * days_left / turn.budget_remaining
-			if turn.budget_remaining >= 10
-			else 65
-		)
-		return threshold if threshold > 6 else 6
+		if buyable == 0:
+			return NEVER
+		return min(NEVER, max(FLOOR, threshold))

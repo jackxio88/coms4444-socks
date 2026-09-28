@@ -191,6 +191,12 @@ class Player1(BasePlayer):
 		return Selection(wear=pair)
 
 	def calculate_discard_threshold(self, turn: TurnContext) -> float:
+<<<<<<< HEAD
+=======
+		if self.is_well_clustered(turn):
+			return self.MAX_THRESHOLD
+
+>>>>>>> 189b6ae7f13833333f4c920a53dbf28ddfa45f60
 		# raw current threshold using remaining day and budget
 		days_left = float(self.days - turn.day)
 		raw_threshold = (
@@ -199,6 +205,18 @@ class Player1(BasePlayer):
 			else self.MAX_THRESHOLD
 		)
 		raw_threshold = min(raw_threshold, self.MAX_THRESHOLD)
+<<<<<<< HEAD
+=======
+
+		# smoother threshold 
+		if len(self.threshold_history) >= self.THRESHOLD_AVG_N:
+			self.threshold_history.popleft()
+		self.threshold_history.append(raw_threshold)
+		smooth_threshold = np.mean(np.array(self.threshold_history))
+			
+		return max(smooth_threshold, self.MIN_THRESHOLD)
+
+>>>>>>> 189b6ae7f13833333f4c920a53dbf28ddfa45f60
 
 		# smoother threshold 
 		if len(self.threshold_history) >= self.THRESHOLD_AVG_N:
@@ -213,11 +231,19 @@ class Player1(BasePlayer):
 			offered: tuple[int, ...], 
 			turn: TurnContext, 
 			selected_pair: tuple[int, ...]) -> tuple[int, ...]:
+<<<<<<< HEAD
 		if self.is_well_clustered(turn):
 			return tuple([])
 
 		# on and off for spending phase 
 		threshold = self.calculate_discard_threshold(turn)
+=======
+		threshold = self.calculate_discard_threshold(turn)
+
+		if turn.day % 10 == 0:
+			print(f"threshold on day {turn.day} is {threshold}")
+
+>>>>>>> 189b6ae7f13833333f4c920a53dbf28ddfa45f60
 		discard = []
 		for c in range(len(offered)):
 			if c not in selected_pair \

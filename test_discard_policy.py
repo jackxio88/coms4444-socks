@@ -1,3 +1,4 @@
+from dataclasses import dataclass
 import json
 
 from core.engine import Engine
@@ -45,36 +46,46 @@ def run_simulation(args):
 
     return run_result
 
+@dataclass 
+class ExperimentParamSet:
+    budget: int
+    capacity: int
+    player_count: int
+    duration: int
+    
+
 
 def run_experiments():
-    budget_vals = [100, 200, 300]
-    capacity_vals = [40, 60, 80]
-    player_count_vals = [4, 6, 8]
-    duration_vals = [120, 240, 360]
+    param_sets = [
+        [150, 24, 3, 1000],
+        [240, 24, 3, 1000],
+        [400, 24, 3, 1000],
+        [120, 28, 4, 730],
+        [240, 28, 4, 730],
+        [400, 28, 4, 730],
+    ]
 
 
     results = []
 
-    for budget in budget_vals:
-        for capacity in capacity_vals:
-            for player_count in player_count_vals:
-                for duration in duration_vals:
+    for param_set in param_sets:
+        [budget, capacity, player_count, duration] = param_set
 
-                    # check if valid, skip invalid experiments 
-                    
-                    if capacity < 4 * player_count + 10:
-                        continue
+        # check if valid, skip invalid experiments 
+        
+        if capacity < 4 * player_count + 10:
+            continue
 
-                    args = settings([
-                        "--player", "1", str(player_count), 
-                        "--budget", str(budget), 
-                        "--capacity", str(capacity), 
-                        "--days", str(duration)])
+        args = settings([
+            "--player", "1", str(player_count), 
+            "--budget", str(budget), 
+            "--capacity", str(capacity), 
+            "--days", str(duration)])
 
-                    run_params = [budget, capacity, player_count, duration]
-                    run_result = run_simulation(args)
+        run_params = [budget, capacity, player_count, duration]
+        run_result = run_simulation(args)
 
-                    results.append(run_params + run_result)
+        results.append(run_params + run_result)
                 
     results = np.array(results)
     np.savetxt(csv_file, 

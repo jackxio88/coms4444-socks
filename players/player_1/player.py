@@ -19,6 +19,7 @@ from models.player import GameContext, PlayerSnapshot, Selection, TurnContext
 from models.player import Player as BasePlayer
 from collections import deque
 import numpy as np 
+import random
 
 class Player1(BasePlayer):
 	MIN_THRESHOLD = 6
@@ -26,6 +27,8 @@ class Player1(BasePlayer):
 	# use the average of last N calculated threshold as current "smoother" threshold
 	# min is 1, 
 	THRESHOLD_AVG_N = 50
+	DISCARD_PROBABILITY = 0.40
+
 	"""Rename me to Player<k>, where <k> is your group number."""
 
 	def __init__(self, snapshot: PlayerSnapshot, ctx: GameContext) -> None:
@@ -128,7 +131,7 @@ class Player1(BasePlayer):
 		selected_pair = self.select_pair(by_shade, wear_scores)
 
 		# modulized discard logic
-		discard_method = self.choose_discard_naive
+		discard_method = self.choose_discard_probablistic
 		discard = discard_method(offered, turn, selected_pair)
 		
 		return Selection(wear=selected_pair, discard=tuple(discard))
@@ -205,18 +208,21 @@ class Player1(BasePlayer):
 			
 		return max(smooth_threshold, self.MIN_THRESHOLD)
 
-
-	def choose_discard_naive(
+	def choose_discard_probablistic(
 			self, 
 			offered: tuple[int, ...], 
 			turn: TurnContext, 
 			selected_pair: tuple[int, ...]) -> tuple[int, ...]:
 		if self.is_well_clustered(turn):
 			return tuple([])
-		
+
+		# on and off for spending phase 
 		threshold = self.calculate_discard_threshold(turn)
 		discard = []
 		for c in range(len(offered)):
-			if c not in selected_pair and offered[c] >= threshold and offered[c] <= (255 - threshold * 2):
+			if c not in selected_pair \
+				and offered[c] >= threshold \
+				and offered[c] <= (255 - threshold * 2) \
+				and random.random() < self.DISCARD_PROBABILITY:
 				discard.append(c)
 		return tuple(discard)

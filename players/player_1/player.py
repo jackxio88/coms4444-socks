@@ -48,7 +48,7 @@ class Player1(BasePlayer):
 		# you want to carry between days lives on self, so initialise it here.
 		self.days_seen = 0
 		self.threshold_history = deque()
-	
+		self.sum_discarded_over_threshold = 0
 
 	def select_socks(self, offered: tuple[int, ...], turn: TurnContext) -> Selection:
 		"""Choose two socks to wear, and decide the fate of the rest.
@@ -131,7 +131,7 @@ class Player1(BasePlayer):
 		selected_pair = self.select_pair(by_shade, wear_scores)
 
 		# modulized discard logic
-		discard_method = self.choose_discard_probablistic
+		discard_method = self.choose_discard_probablistic_improved
 		discard = discard_method(offered, turn, selected_pair)
 		
 		return Selection(wear=selected_pair, discard=tuple(discard))
@@ -216,7 +216,6 @@ class Player1(BasePlayer):
 		if self.is_well_clustered(turn):
 			return tuple([])
 
-		# on and off for spending phase 
 		threshold = self.calculate_discard_threshold(turn)
 		discard = []
 		for c in range(len(offered)):
@@ -226,3 +225,38 @@ class Player1(BasePlayer):
 				and random.random() < self.DISCARD_PROBABILITY:
 				discard.append(c)
 		return tuple(discard)
+
+	def choose_discard_probablistic_improved(
+			self, 
+			offered: tuple[int, ...], 
+			turn: TurnContext, 
+			selected_pair: tuple[int, ...]) -> tuple[int, ...]:
+		if self.is_well_clustered(turn):
+			return tuple([])
+
+		threshold = self.calculate_discard_threshold(turn)
+		discard = []
+		for c in range(len(offered)):
+			if c not in selected_pair:
+				offset_offered = self.get_days_worn(c) - threshold
+				# old socks has a chance of being discarded 
+				if offered[c] >= threshold \
+					and offered[c] <= (255 - threshold * 2):
+						if random.random() < self.DISCARD_PROBABILITY:
+							discard.append(c)
+							self.sum_discarded_over_threshold += offset_offered
+				# if discarding socks not reaching threshold restores balance, also discard with a chance
+				else:
+					# this should be negative since this is an under-threshold sock
+					if abs(offset_offered + self.sum_discarded_over_threshold) < abs(self.sum_discarded_over_threshold):
+						if random.random() < self.DISCARD_PROBABILITY:
+							discard.append(c)
+							self.sum_discarded_over_threshold += offset_offered
+		return tuple(discard)
+
+	@staticmethod
+	def get_days_worn(shade: int) -> int:
+		if shade < 65:
+			return shade
+		else:
+			return int(shade / 2)

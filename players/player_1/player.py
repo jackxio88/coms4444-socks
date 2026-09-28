@@ -17,9 +17,15 @@ from itertools import combinations
 
 from models.player import GameContext, PlayerSnapshot, Selection, TurnContext
 from models.player import Player as BasePlayer
-
+from collections import deque
+import numpy as np 
 
 class Player1(BasePlayer):
+	MIN_THRESHOLD = 6
+	MAX_THRESHOLD = 65
+	# use the average of last N calculated threshold as current "smoother" threshold
+	# min is 1, 
+	THRESHOLD_AVG_N = 50
 	"""Rename me to Player<k>, where <k> is your group number."""
 
 	def __init__(self, snapshot: PlayerSnapshot, ctx: GameContext) -> None:
@@ -38,6 +44,8 @@ class Player1(BasePlayer):
 		# itself - you cannot preload state into an already-built object. Anything
 		# you want to carry between days lives on self, so initialise it here.
 		self.days_seen = 0
+		self.threshold_history = deque()
+	
 
 	def select_socks(self, offered: tuple[int, ...], turn: TurnContext) -> Selection:
 		"""Choose two socks to wear, and decide the fate of the rest.
@@ -179,22 +187,34 @@ class Player1(BasePlayer):
 
 		return Selection(wear=pair)
 
-	def choose_discard_threshold(self, turn: TurnContext) -> float:
+	def calculate_discard_threshold(self, turn: TurnContext) -> float:
+		# raw current threshold using remaining day and budget
 		days_left = float(self.days - turn.day)
-
-		threshold = (
-			5.0 * self.roommates * days_left / turn.budget_remaining
+		raw_threshold = (
+			10.0 * self.roommates * days_left / (3 * turn.budget_remaining)
 			if turn.budget_remaining > 0
-			else 65
+			else self.MAX_THRESHOLD
 		)
-		return threshold if threshold > 6 else 6
+		raw_threshold = min(raw_threshold, self.MAX_THRESHOLD)
+
+		# smoother threshold 
+		if len(self.threshold_history) >= self.THRESHOLD_AVG_N:
+			self.threshold_history.popleft()
+		self.threshold_history.append(raw_threshold)
+		smooth_threshold = np.mean(np.array(self.threshold_history))
+			
+		return max(smooth_threshold, self.MIN_THRESHOLD)
+
 
 	def choose_discard_naive(
 			self, 
 			offered: tuple[int, ...], 
 			turn: TurnContext, 
 			selected_pair: tuple[int, ...]) -> tuple[int, ...]:
-		threshold = self.choose_discard_threshold(turn)
+		if self.is_well_clustered(turn):
+			return tuple([])
+		
+		threshold = self.calculate_discard_threshold(turn)
 		discard = []
 		for c in range(len(offered)):
 			if c not in selected_pair and offered[c] >= threshold and offered[c] <= (255 - threshold * 2):

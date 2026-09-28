@@ -118,11 +118,11 @@ class Player1(BasePlayer):
 			return self.well_clustered_selection(by_shade, wear_scores, turn)
 
 		selected_pair = self.select_pair(by_shade, wear_scores)
-		threshold = self.choose_discard_threshold(turn)
-		discard = []
-		for c in range(len(offered)):
-			if c not in selected_pair and offered[c] >= threshold and offered[c] <= (255 - threshold * 2):
-				discard.append(c)
+
+		# modulized discard logic
+		discard_method = self.choose_discard_naive
+		discard = discard_method(offered, turn, selected_pair)
+		
 		return Selection(wear=selected_pair, discard=tuple(discard))
 
 	@staticmethod
@@ -179,9 +179,6 @@ class Player1(BasePlayer):
 
 		return Selection(wear=pair)
 
-
-
-
 	def choose_discard_threshold(self, turn: TurnContext) -> float:
 		days_left = float(self.days - turn.day)
 
@@ -191,3 +188,15 @@ class Player1(BasePlayer):
 			else 65
 		)
 		return threshold if threshold > 6 else 6
+
+	def choose_discard_naive(
+			self, 
+			offered: tuple[int, ...], 
+			turn: TurnContext, 
+			selected_pair: tuple[int, ...]) -> tuple[int, ...]:
+		threshold = self.choose_discard_threshold(turn)
+		discard = []
+		for c in range(len(offered)):
+			if c not in selected_pair and offered[c] >= threshold and offered[c] <= (255 - threshold * 2):
+				discard.append(c)
+		return tuple(discard)

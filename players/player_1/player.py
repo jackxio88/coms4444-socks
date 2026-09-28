@@ -28,7 +28,6 @@ class Player1(BasePlayer):
 	# use the average of last N calculated threshold as current "smoother" threshold
 	# min is 1, 
 	THRESHOLD_AVG_N = 50
-	DISCARD_PROBABILITY = 0.40
 	SEED = 4444 
 
 	"""Rename me to Player<k>, where <k> is your group number."""
@@ -53,6 +52,8 @@ class Player1(BasePlayer):
 		self.count_discarded_over_threshold = 0
 		self.sum_discarded_over_threshold = 0
 		self.dicsard_probability = 0.4
+
+		self.dynamic_discard_probability_method = self.calculate_dynamic_discard_probability_linear
 
 		random.seed(self.SEED)
 
@@ -120,6 +121,12 @@ class Player1(BasePlayer):
 		"""
 		if self.days_seen == 0:
 			self.total_budget = turn.budget_remaining
+			dicsard_probability_method = self.set_base_discard_probability_sigmoid
+			dicsard_probability_method()
+			print(f"probability given budget {self.total_budget} for {self.roommates} roomamtes for {self.days} days set to {self.dicsard_probability}")
+
+			
+
 		self.days_seen += 1
 
 		# if offered = [0, 1, 255, 253] 
@@ -138,7 +145,7 @@ class Player1(BasePlayer):
 		selected_pair = self.select_pair(by_shade, wear_scores)
 
 		# modulized discard logic
-		discard_method = self.choose_discard_probablistic
+		discard_method = self.choose_discard_probablistic_dynamic
 		discard = discard_method(offered, turn, selected_pair)
 		
 		return Selection(wear=selected_pair, discard=tuple(discard))
@@ -235,10 +242,50 @@ class Player1(BasePlayer):
 				discard.append(c)
 		return tuple(discard)
 
+	# calculate the discard probability to use in this run
+	# the more ample the budget, the higher the probability 
+	# as 
+	def set_base_discard_probability_linear(
+		self,
+		base_proability: float = 0.4,
+		base_budget_per_day: float = 0.052, # the cost of wearing a pear of socks once
+		min_probability: float = 0.25,
+		masx_probability: float = 1,
+		k: float = 7 # sensitivity
+	):
+		daily_budget = self.total_budget / (self.roommates * self.days)
+		delta_budget = daily_budget - base_budget_per_day
+		raw_prob = base_proability + k * delta_budget
+
+		# Clamp between min_probability and masx_probability
+		self.dicsard_probability = max(min_probability, min(masx_probability, raw_prob))
+
+
+	def set_base_discard_probability_sigmoid(
+		self,
+		base_budget_per_day: float = 0.052,
+		base_proability: float = 0.4,
+		min_probability: float = 0.25,
+		masx_probability: float = 1.0,
+		k: float = 5  
+	):
+		daily_budget = self.total_budget / (self.roommates * self.days)
+		if not (min_probability < base_proability < masx_probability):
+			raise ValueError("base_proability must strictly lie between min_probability and masx_probability.")
+
+		# Calculate shift so that at daily_budget == base_budget_per_day, prob == base_proability
+		shift = math.log((masx_probability - base_proability) / (base_proability - min_probability))
+		
+		delta_budget = daily_budget - base_budget_per_day
+		
+		# Sigmoid formula bounded between min_probability and masx_probability
+		prob = min_probability + (masx_probability - min_probability) / (1.0 + math.exp(-k * delta_budget + shift))
+		self.dicsard_probability = prob
+
 
 	# calculate probability of discarding based on how old the sock is 
 	# the older the sock is (over threshold), the larger the probability of getting discarded
-	def choose_discard_dynamic_probablistic(
+	def choose_discard_probablistic_dynamic(
 			self, 
 			offered: tuple[int, ...], 
 			turn: TurnContext, 
@@ -253,34 +300,32 @@ class Player1(BasePlayer):
 		for c in range(len(offered)):
 			if c not in selected_pair:
 				days_worn = self.get_days_worn(offered[c])
-				discard_probability_method = self.get_discard_probability_linear
-				discard_probability =  discard_probability_method(days_worn, threshold)
+				
+				discard_probability = self.dynamic_discard_probability_method(days_worn, threshold)
 				if random.random() < discard_probability:
 					discard.append(c)
 		return tuple(discard)
 
-	@staticmethod
-	def get_discard_probability_linear(
+	def calculate_dynamic_discard_probability_linear(
+		self,
 		days_worn: float,
 		threshold: float, 
-		base_probability: float = 0.4,
 		N: int =  3) -> float:
 			
 		# Linear equation centered at threshold
-		p = 0.5 + (days_worn - threshold) / (2 * N)
+		p = self.dicsard_probability + (days_worn - threshold) / (2 * N)
 		
 		# Clamp value between 0.0 and 1.0
 		return max(0.0, min(1.0, p))
 
 
-	@staticmethod
-	def get_discard_probability_sigmoid(
+	def calculate_dynamic_discard_probability_sigmoid(
+		self,
 		days_worn: int, 
 		threshold: float,
-		base_probability: float = 0.4,
 		k: float = 0.5) -> float:
 		
-		offset = math.log(base_probability / (1 - base_probability))
+		offset = math.log(self.dicsard_probability / (1 - self.dicsard_probability))
 		exponent = - k * (days_worn - threshold) - offset
 		probability = 1 / (1 + math.exp(exponent))
 		
@@ -295,38 +340,38 @@ class Player1(BasePlayer):
 
 
 	# this method doesn't seem to provide definite benefit
-	@DeprecationWarning
-	def _choose_discard_probablistic_improved(
-			self, 
-			offered: tuple[int, ...], 
-			turn: TurnContext, 
-			selected_pair: tuple[int, ...]) -> tuple[int, ...]:
-		self.DISCARD_PROBABILITY = 0.4
+	# @DeprecationWarning
+	# def _choose_discard_probablistic_improved(
+	# 		self, 
+	# 		offered: tuple[int, ...], 
+	# 		turn: TurnContext, 
+	# 		selected_pair: tuple[int, ...]) -> tuple[int, ...]:
+	# 	self.DISCARD_PROBABILITY = 0.4
 		
-		if self.is_well_clustered(turn):
-			return tuple([])
+	# 	if self.is_well_clustered(turn):
+	# 		return tuple([])
 
-		threshold = self.calculate_discard_threshold(turn)
-		discard = []
-		for c in range(len(offered)):
-			if c not in selected_pair:
-				offset_from_threshold = self.get_days_worn(offered[c]) - threshold
-				# old socks has a chance of being discarded 
-				if offered[c] >= threshold \
-					and offered[c] <= (255 - threshold * 2):
-						if random.random() < self.DISCARD_PROBABILITY:
-							discard.append(c)
-							self.sum_discarded_over_threshold += offset_from_threshold # this is positive
-							self.count_discarded_over_threshold += 1
-				# if discarding socks not reaching threshold restores balance, also discard with a chance
-				else:
-					# this should be negative since this is an under-threshold sock
-					average_over_threshold = self.sum_discarded_over_threshold / self.count_discarded_over_threshold \
-						if self.count_discarded_over_threshold > 0 \
-						else 0
-					if abs(offset_from_threshold) <= average_over_threshold:
-						if random.random() < self.DISCARD_PROBABILITY:
-							discard.append(c)
-							self.sum_discarded_over_threshold += offset_from_threshold # this is negative
-							self.count_discarded_over_threshold -= 1
-		return tuple(discard)
+	# 	threshold = self.calculate_discard_threshold(turn)
+	# 	discard = []
+	# 	for c in range(len(offered)):
+	# 		if c not in selected_pair:
+	# 			offset_from_threshold = self.get_days_worn(offered[c]) - threshold
+	# 			# old socks has a chance of being discarded 
+	# 			if offered[c] >= threshold \
+	# 				and offered[c] <= (255 - threshold * 2):
+	# 					if random.random() < self.DISCARD_PROBABILITY:
+	# 						discard.append(c)
+	# 						self.sum_discarded_over_threshold += offset_from_threshold # this is positive
+	# 						self.count_discarded_over_threshold += 1
+	# 			# if discarding socks not reaching threshold restores balance, also discard with a chance
+	# 			else:
+	# 				# this should be negative since this is an under-threshold sock
+	# 				average_over_threshold = self.sum_discarded_over_threshold / self.count_discarded_over_threshold \
+	# 					if self.count_discarded_over_threshold > 0 \
+	# 					else 0
+	# 				if abs(offset_from_threshold) <= average_over_threshold:
+	# 					if random.random() < self.DISCARD_PROBABILITY:
+	# 						discard.append(c)
+	# 						self.sum_discarded_over_threshold += offset_from_threshold # this is negative
+	# 						self.count_discarded_over_threshold -= 1
+	# 	return tuple(discard)

@@ -27,3 +27,6 @@ venv/
 
 # macOS
 .DS_Store
+
+# Output of tourney.py (games, reports, measured player speeds)
+tourney_results/

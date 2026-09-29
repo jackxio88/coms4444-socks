@@ -255,6 +255,9 @@ class Player1(BasePlayer):
 
 		return Selection(wear=pair)
 
+	# calculate a threshold for sock discard policy 
+	# return in number of days, the threshold over which socks need to be discarded 
+	# uses the last N days' threshold for smoothing  
 	def calculate_discard_threshold(self, turn: TurnContext) -> float:
 		# raw current threshold using remaining day and budget
 		days_left = float(self.days - turn.day)
@@ -293,49 +296,54 @@ class Player1(BasePlayer):
 				discard.append(c)
 		return tuple(discard)
 
-	# calculate the discard probability to use in this run
-	# the more ample the budget, the higher the probability 
-	# as 
+	# calculate a base discard probability based on budget / cost ratio 
+	# base budget calculated using 10 / 6 / 64 * 2 
+	# base probability found by experiments
+	# linear version
 	def set_base_discard_probability_linear(
 		self,
 		base_proability: float = 0.4,
-		base_budget_per_day: float = 0.052, # the cost of wearing a pear of socks once
+		base_budget_per_day: float = 0.052,
 		min_probability: float = 0.25,
-		masx_probability: float = 1,
+		max_probability: float = 1.0,
 		k: float = 7 # sensitivity
 	):
 		daily_budget = self.total_budget / (self.roommates * self.days)
 		delta_budget = daily_budget - base_budget_per_day
 		raw_prob = base_proability + k * delta_budget
 
-		# Clamp between min_probability and masx_probability
-		self.dicsard_probability = max(min_probability, min(masx_probability, raw_prob))
+		# Clamp between min_probability and max_probability
+		self.dicsard_probability = max(min_probability, min(max_probability, raw_prob))
 
 
+	# calculate a base discard probability based on budget / cost ratio 
+	# sigmoid version
 	def set_base_discard_probability_sigmoid(
 		self,
-		base_budget_per_day: float = 0.052,
+		base_budget_per_day: float = 0.052, 
 		base_proability: float = 0.4,
 		min_probability: float = 0.25,
-		masx_probability: float = 1.0,
+		max_probability: float = 1.0,
 		k: float = 5  
 	):
 		daily_budget = self.total_budget / (self.roommates * self.days)
-		if not (min_probability < base_proability < masx_probability):
-			raise ValueError("base_proability must strictly lie between min_probability and masx_probability.")
+		if not (min_probability < base_proability < max_probability):
+			raise ValueError("base_proability must strictly lie between min_probability and max_probability.")
 
 		# Calculate shift so that at daily_budget == base_budget_per_day, prob == base_proability
-		shift = math.log((masx_probability - base_proability) / (base_proability - min_probability))
+		shift = math.log((max_probability - base_proability) / (base_proability - min_probability))
 		
 		delta_budget = daily_budget - base_budget_per_day
 		
-		# Sigmoid formula bounded between min_probability and masx_probability
-		prob = min_probability + (masx_probability - min_probability) / (1.0 + math.exp(-k * delta_budget + shift))
+		# Sigmoid formula bounded between min_probability and max_probability
+		prob = min_probability + (max_probability - min_probability) / (1.0 + math.exp(-k * delta_budget + shift))
 		self.dicsard_probability = prob
 
 
-	# calculate probability of discarding based on how old the sock is 
+	# discard policy based on how old the sock is 
 	# the older the sock is (over threshold), the larger the probability of getting discarded
+	# using the base probability set on day 1
+	# and then calculate probability based on how old the sock is 
 	def choose_discard_probablistic_dynamic(
 			self, 
 			offered: tuple[int, ...], 

@@ -39,7 +39,9 @@ def run_simulation(args):
             engine_result["total_sockless_days"],
             engine_result["budget_exhausted_on_day"] or -1, # this is none when not exhausted
             engine_result["budget_remaining"],
+            engine_result["total_embarrassment"] / len(roster) / args.days,
         ]
+
     finally:
         if log is not None:
             log.finish(engine)
@@ -63,6 +65,9 @@ def run_experiments():
         [120, 28, 4, 730],
         [240, 28, 4, 730],
         [400, 28, 4, 730],
+        [300, 48, 9, 730],
+        [500, 84, 18, 365],
+        [1000, 168, 36, 365],
     ]
 
 
@@ -86,13 +91,19 @@ def run_experiments():
         run_result = run_simulation(args)
 
         results.append(run_params + run_result)
+
                 
     results = np.array(results)
+
+    # calculate average per person embarrasement
+
+
+
     np.savetxt(csv_file, 
                results, 
                fmt="%.2f", 
                delimiter=",",
-               header="capacity,budget,roomates,duration,total_embarrassment,total_sockless_days,budget_exhausted_on,budget_remaining",
+               header="budget,capacity,roomates,duration,total_embarrassment,total_sockless_days,budget_exhausted_on,budget_remaining,avg_daily_per_person_embarrassement",
             )
 
 run_experiments()

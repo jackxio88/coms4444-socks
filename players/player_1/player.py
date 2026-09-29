@@ -54,6 +54,7 @@ class Player1(BasePlayer):
 		self.sum_discarded_over_threshold = 0
 		self.dicsard_probability = 0.4
 
+		self.set_base_discard_probability_method = self.set_base_discard_probability_sigmoid
 		self.dynamic_discard_probability_method = self.calculate_dynamic_discard_probability_linear
 
 		random.seed(self.SEED)
@@ -126,11 +127,7 @@ class Player1(BasePlayer):
 		"""
 		if self.days_seen == 0:
 			self.total_budget = turn.budget_remaining
-			dicsard_probability_method = self.set_base_discard_probability_sigmoid
-			dicsard_probability_method()
-			print(f"probability given budget {self.total_budget} for {self.roommates} roomamtes for {self.days} days set to {self.dicsard_probability}")
-
-			
+			self.set_base_discard_probability_method()
 
 			self.previous_budget = self.total_budget
 		self.days_seen += 1
@@ -164,9 +161,10 @@ class Player1(BasePlayer):
 		selected_pair = self.select_pair(by_shade, wear_scores)
 
 		# modulized discard logic
-		discard_method = self.choose_discard_probablistic_dynamic
-		discard = discard_method(offered, turn, selected_pair)
-		
+		# discard is probablistic
+		# but no discard happens after budget runs out
+		discard_method = self.choose_discard_probablistic_dynamic 
+		discard = discard_method(offered, turn, selected_pair) 
 		return Selection(wear=selected_pair, discard=tuple(discard))
 
 	@staticmethod
@@ -262,7 +260,7 @@ class Player1(BasePlayer):
 		# raw current threshold using remaining day and budget
 		days_left = float(self.days - turn.day)
 		raw_threshold = (
-			10.0 * self.roommates * days_left / (3 * turn.budget_remaining)
+			(10.0 * self.roommates * days_left + 32 * self.roommates) / (3 * turn.budget_remaining)
 			if turn.budget_remaining > 0
 			else self.MAX_THRESHOLD
 		)
@@ -278,7 +276,8 @@ class Player1(BasePlayer):
 
 	# discard sock over thresohld 
 	# with a probability 
-	def choose_discard_probablistic(
+	@DeprecationWarning
+	def _choose_discard_probablistic(
 			self, 
 			offered: tuple[int, ...], 
 			turn: TurnContext, 
@@ -349,7 +348,7 @@ class Player1(BasePlayer):
 			offered: tuple[int, ...], 
 			turn: TurnContext, 
 			selected_pair: tuple[int, ...]) -> tuple[int, ...]:
-		if self.is_well_clustered(turn):
+		if self.is_well_clustered(turn) or turn.budget_remaining <= 0:
 			return tuple([])
 
 		
@@ -376,7 +375,6 @@ class Player1(BasePlayer):
 		
 		# Clamp value between 0.0 and 1.0
 		return max(0.0, min(1.0, p))
-
 
 	def calculate_dynamic_discard_probability_sigmoid(
 		self,

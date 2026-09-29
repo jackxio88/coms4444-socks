@@ -13,8 +13,15 @@ This directory is not itself discovered - the registry only matches
 ``player_<digits>`` - so the template can never appear in a run as a competitor.
 """
 
+# Speed-optimised for group 1's internal tournament runs (test-tourney-branch only).
+# _prepare_lifecycle_model builds all projection steps at once with numpy, and select_socks
+# prices each sock once per turn instead of once per candidate move. Every sum and product
+# keeps its original order (cumsum/cumprod are sequential), so every decision is
+# bit-identical to the original player.
 from itertools import combinations
 from math import exp
+
+import numpy as np
 
 from models.player import GameContext, PlayerSnapshot, Selection, TurnContext
 from models.player import Player as BasePlayer
@@ -98,6 +105,9 @@ LEFTOVER_VALUE_WEIGHT = 0.20
 POPULATION_WEIGHT = 0.50
 POPULATION_DISCARD_PENALTY = 0.75
 SOCK_REPLACEMENT_COST = PACK_COST / 6.0
+
+_AGES = np.arange(AGE_BINS, dtype=np.float64)
+_AGE_INDEX = np.arange(AGE_BINS)
 
 
 class Player6(BasePlayer):
@@ -225,8 +235,8 @@ class Player6(BasePlayer):
 		steps = max(1, int(self.lifecycle_horizon) + 1)
 		wears_household_daily = max(1.0, 2.0 * self.roommates)
 		turnover = min(0.45, self.expected_replacement_rate / wears_household_daily)
-		all_snapshots: list[list[list[float]]] = []
-		all_prefixes: list[list[tuple[list[float], list[float]]]] = []
+		keep = 1.0 - turnover
+		starts = []
 		for colour in range(2):
 			current = [
 				FAST_HIST_WEIGHT * fast + SLOW_HIST_WEIGHT * slow
@@ -237,26 +247,62 @@ class Player6(BasePlayer):
 			total = sum(current)
 			if total > 0.0:
 				current = [mass / total for mass in current]
-			snapshots = []
-			prefixes = []
-			for _ in range(steps):
-				snapshots.append(current)
-				mass_prefix = [0.0]
-				age_prefix = [0.0]
-				for age, mass in enumerate(current):
-					mass_prefix.append(mass_prefix[-1] + mass)
-					age_prefix.append(age_prefix[-1] + age * mass)
-				prefixes.append((mass_prefix, age_prefix))
-				aged = [0.0] * AGE_BINS
-				for age, mass in enumerate(current):
-					aged[min(64, age + 1)] += mass
-				current = [mass * (1.0 - turnover) for mass in aged]
-				current[0] += turnover
-			all_snapshots.append(snapshots)
-			all_prefixes.append(prefixes)
-		self.lifecycle_distributions = all_snapshots
-		self.lifecycle_prefixes = all_prefixes
-		self.projected_age_hist = [snapshots[-1] for snapshots in all_snapshots]
+			starts.append(current)
+
+		# Each step ages every sock by one wear (the top two ages merge), scales all mass by
+		# `keep` and puts `turnover` back at age 0. So below the cap, a cell is either a
+		# starting mass or the turnover mass multiplied by `keep` a fixed number of times;
+		# cumprod does those multiplications in the same order as the step-by-step loop.
+		# Only the capped age mixes cells, and it is filled by a short scalar loop.
+		start = np.array(starts)
+		fresh_path = np.cumprod(np.concatenate(([turnover], np.full(AGE_BINS - 2, keep))))
+		start_paths = np.cumprod(
+			np.concatenate(
+				(start[:, : AGE_BINS - 1, None], np.full((2, AGE_BINS - 1, steps - 1), keep)),
+				axis=2,
+			),
+			axis=2,
+		)
+		age = _AGE_INDEX[None, : AGE_BINS - 1]
+		step = np.arange(steps)[:, None]
+		below_cap = np.where(
+			age >= step,
+			start_paths[:, np.clip(age - step, 0, None), step],
+			fresh_path[np.minimum(age, AGE_BINS - 2)],
+		)
+		masses = np.empty((2, steps, AGE_BINS))
+		masses[:, :, : AGE_BINS - 1] = below_cap
+		for colour in range(2):
+			capped = starts[colour][AGE_BINS - 1]
+			next_to_cap = below_cap[colour, :, AGE_BINS - 2].tolist()
+			for s in range(steps):
+				masses[colour, s, AGE_BINS - 1] = capped
+				capped = (next_to_cap[s] + capped) * keep
+		self._mass_rows = np.zeros((2, steps, AGE_BINS + 1))
+		self._age_rows = np.zeros((2, steps, AGE_BINS + 1))
+		np.cumsum(masses, axis=2, out=self._mass_rows[:, :, 1:])
+		np.cumsum(_AGES * masses, axis=2, out=self._age_rows[:, :, 1:])
+
+		# Only the last step's prefixes are read directly (by _kept_sock_cost); _lifecycle_cost
+		# reads the numpy tables above.
+		self.lifecycle_distributions = masses
+		self.lifecycle_prefixes = [
+			[(self._mass_rows[colour, -1].tolist(), self._age_rows[colour, -1].tolist())]
+			for colour in range(2)
+		]
+		self.projected_age_hist = [masses[colour, -1].tolist() for colour in range(2)]
+
+		# Step weights of _lifecycle_cost are the same for every sock this turn.
+		self._step_weights = []
+		for s in range(steps):
+			remaining = self.lifecycle_horizon - s
+			if remaining <= 0.0:
+				break
+			self._step_weights.append(min(1.0, remaining) * LIFECYCLE_DISCOUNT**s)
+		self._total_step_weight = 0.0
+		for weight in self._step_weights:
+			self._total_step_weight += weight
+		self._step_weight_array = np.array(self._step_weights)
 
 	def _expected_mismatch(
 		self,
@@ -286,16 +332,26 @@ class Player6(BasePlayer):
 			return self._lifecycle_cache[key]
 		if self.lifecycle_horizon <= 0.0:
 			return 0.0
-		total_cost = 0.0
-		total_weight = 0.0
-		for step, prefixes in enumerate(self.lifecycle_prefixes[colour]):
-			remaining = self.lifecycle_horizon - step
-			if remaining <= 0.0:
-				break
-			weight = min(1.0, remaining) * LIFECYCLE_DISCOUNT**step
-			candidate_age = min(64, start_age + step)
-			total_cost += weight * self._expected_mismatch(colour, candidate_age, prefixes)
-			total_weight += weight
+		# _expected_mismatch at every step at once, summed step by step (cumsum) as before.
+		used = len(self._step_weights)
+		if used:
+			steps = np.arange(used)
+			candidate_age = np.minimum(64, start_age + steps)
+			mass = self._mass_rows[colour, :used]
+			moment = self._age_rows[colour, :used]
+			fade = 1 if colour == 0 else 2
+			free_radius = THRESHOLD // fade
+			left_end = np.maximum(0, candidate_age - free_radius)
+			right_start = np.minimum(AGE_BINS, candidate_age + free_radius + 1)
+			left = candidate_age * mass[steps, left_end] - moment[steps, left_end]
+			right = (moment[:, AGE_BINS] - moment[steps, right_start]) - candidate_age * (
+				mass[:, AGE_BINS] - mass[steps, right_start]
+			)
+			mismatch = fade * (left + right)
+			total_cost = float(np.cumsum(self._step_weight_array * mismatch)[-1])
+		else:
+			total_cost = 0.0
+		total_weight = self._total_step_weight
 		value = total_cost / total_weight if total_weight else 0.0
 		self._lifecycle_cache[key] = value
 		return value
@@ -624,13 +680,25 @@ class Player6(BasePlayer):
 		money_shadow, discard_limit = self._budget_discard_limit(turn, unit)
 		self._prepare_lifecycle_model(turn)
 
+		# Each sock's worn / discarded / kept cost is fixed for the turn, so price it once and
+		# add the pieces in the same order as _action_cost.
+		worn_cost = [self._worn_sock_cost(shade, money_shadow) for shade in offered]
+		dropped_cost = [self._discarded_sock_cost(shade, money_shadow) for shade in offered]
+		kept_cost = [self._kept_sock_cost(shade) for shade in offered]
+
 		best_action = ((0, 1), ())
 		best_key = None
 		for wear in combinations(range(unit), 2):
 			leftovers = tuple(index for index in range(unit) if index not in wear)
 			for count in range(min(discard_limit, len(leftovers)) + 1):
 				for discard in combinations(leftovers, count):
-					cost = self._action_cost(offered, wear, discard, money_shadow)
+					cost = IMMEDIATE_COST_WEIGHT * self._embarrassment(
+						offered[wear[0]], offered[wear[1]]
+					)
+					cost += worn_cost[wear[0]]
+					cost += worn_cost[wear[1]]
+					for index in leftovers:
+						cost += dropped_cost[index] if index in discard else kept_cost[index]
 					key = (
 						cost,
 						self._embarrassment(offered[wear[0]], offered[wear[1]]),

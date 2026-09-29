@@ -1,6 +1,13 @@
+# Speed-optimised for group 1's internal tournament runs (test-tourney-branch only).
+# future_mismatch computes all projected wears at once with numpy instead of one Python pass
+# per wear. Every sum keeps the original left-to-right order (cumsum is sequential), so the
+# forecasts, and therefore every decision, are bit-identical to the original player.
 from dataclasses import dataclass
+from functools import lru_cache
 from itertools import combinations
 from math import ceil
+
+import numpy as np
 
 from core.engine import HOLE_PROBABILITY, PACK_COST, PACK_SIZE
 from models.player import GameContext, PlayerSnapshot, Selection, TurnContext
@@ -33,6 +40,35 @@ def mismatch_curve(weights: list[float], shade_step: int) -> list[float]:
 	return curve
 
 
+_AGES = np.arange(MAX_AGE + 1, dtype=np.float64)
+_AGE_INDEX = np.arange(MAX_AGE + 1)
+
+
+def _mismatch_matrix(weights: np.ndarray, shade_step: int) -> np.ndarray:
+	"""mismatch_curve for every row of ``weights`` (rows x 65) at once, same arithmetic order."""
+	rows = weights.shape[0]
+	prefix_mass = np.zeros((rows, MAX_AGE + 2))
+	prefix_age = np.zeros((rows, MAX_AGE + 2))
+	np.cumsum(weights, axis=1, out=prefix_mass[:, 1:])
+	np.cumsum(weights * _AGES, axis=1, out=prefix_age[:, 1:])
+	free_radius = FREE_SHADE_GAP // shade_step
+	lower = np.maximum(0, _AGE_INDEX - free_radius)
+	upper = np.minimum(MAX_AGE + 1, _AGE_INDEX + free_radius + 1)
+	younger = _AGES * prefix_mass[:, lower] - prefix_age[:, lower]
+	older = (prefix_age[:, -1:] - prefix_age[:, upper]) - _AGES * (
+		prefix_mass[:, -1:] - prefix_mass[:, upper]
+	)
+	return np.maximum(0.0, shade_step * (younger + older))
+
+
+@lru_cache(maxsize=512)
+def _arrival_cost(survival: float, shade_step: int) -> tuple[float, ...]:
+	"""Mismatch against the continuing replacement supply; depends only on its inputs, so cached."""
+	arrivals = [(1.0 - survival) * survival**age for age in range(MAX_AGE + 1)]
+	arrivals[MAX_AGE] = survival**MAX_AGE
+	return tuple(mismatch_curve(arrivals, shade_step))
+
+
 def future_mismatch(
 	age_weights: list[float],
 	*,
@@ -53,20 +89,24 @@ def future_mismatch(
 		return forecast
 	mass = sum(age_weights)
 	observed = [weight / mass for weight in age_weights] if mass else [0.0] * (MAX_AGE + 1)
-	arrivals = [(1.0 - survival) * survival**age for age in range(MAX_AGE + 1)]
-	arrivals[MAX_AGE] = survival**MAX_AGE
-	arrival_cost = mismatch_curve(arrivals, shade_step)
+	arrival_cost = _arrival_cost(survival, shade_step)
 	discount = min(survival, survival_cap)
-	for wear in range(min(MAX_AGE, ceil(wear_horizon))):
-		interval = discount**wear - discount ** min(wear + 1.0, wear_horizon)
-		observed_cost = mismatch_curve(observed, shade_step)
-		for age in range(MAX_AGE + 1):
-			aged = min(MAX_AGE, age + wear)
-			expected = (1.0 - replacement_share) * observed_cost[aged]
-			expected += replacement_share * arrival_cost[aged]
-			forecast[age] += interval * expected
-		# All observed mass at or approaching the wear limit stays at the cap.
-		observed = [0.0, *observed[: MAX_AGE - 1], observed[MAX_AGE - 1] + observed[MAX_AGE]]
+	wears = min(MAX_AGE, ceil(wear_horizon))
+	intervals = np.array(
+		[discount**wear - discount ** min(wear + 1.0, wear_horizon) for wear in range(wears)]
+	)
+	# Row w is the observed drawer after w wears: mass moves up one age and the last two ages
+	# merge, so the capped age is a running sum of observed[64], observed[63], ... in that order.
+	start = np.array(observed)
+	aged_rows = np.zeros((wears, MAX_AGE + 1))
+	for wear in range(wears):
+		aged_rows[wear, wear:MAX_AGE] = start[: MAX_AGE - wear]
+	aged_rows[:, MAX_AGE] = np.cumsum(start[::-1])[:wears]
+	observed_cost = _mismatch_matrix(aged_rows, shade_step)
+	aged = np.minimum(MAX_AGE, _AGE_INDEX[None, :] + np.arange(wears)[:, None])
+	expected = (1.0 - replacement_share) * observed_cost[np.arange(wears)[:, None], aged]
+	expected = expected + replacement_share * np.array(arrival_cost)[aged]
+	forecast = np.cumsum(intervals[:, None] * expected, axis=0)[-1].tolist()
 	if wear_horizon > MAX_AGE:
 		remaining = replacement_share * (discount**MAX_AGE - discount**wear_horizon)
 		tail_cost = remaining * arrival_cost[MAX_AGE]

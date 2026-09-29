@@ -1,9 +1,15 @@
+# Speed-optimised for group 1's internal tournament runs (test-tourney-branch only).
+# _conditional_values evaluates every gap at once with numpy, and _stats is cached for the
+# turn (its samples change only in _observe). Sums keep their original order (cumsum is
+# sequential), so every decision is bit-identical to the original player.
 import math
 from bisect import bisect_left, bisect_right
 from collections import deque
 from functools import lru_cache
 from itertools import combinations
 from math import ceil, isinf, sqrt
+
+import numpy as np
 
 from core.engine import EMBARRASSMENT_THRESHOLD, PACK_COST, PACK_SIZE
 from models.player import GameContext, PlayerSnapshot, Selection, TurnContext
@@ -73,6 +79,7 @@ class Player4(BasePlayer):
 	WARMUP_DAYS = 20
 	HORIZON_DAYS = 20
 	PRESERVE_BASELINE_AGE = 3.0
+	GAP_BLOCK = 58  # gaps evaluated together by _conditional_values (speed only)
 
 	def __init__(self, snapshot: PlayerSnapshot, ctx: GameContext) -> None:
 		super().__init__(snapshot, ctx)
@@ -85,6 +92,7 @@ class Player4(BasePlayer):
 		self._requested_discards = 0
 		self._observations = deque(maxlen=max(40, self.capacity))
 		self._gap_geometry = lru_cache(maxsize=512)(_gap_geometry)
+		self._stats_cache: dict[bool, tuple[float, float]] = {}
 
 	def select_socks(self, offered: tuple[int, ...], turn: TurnContext) -> Selection:
 		"""Use the original selector when the budget permits frequent retirement."""
@@ -171,7 +179,61 @@ class Player4(BasePlayer):
 	def _conditional_values(
 		self, masses: dict[int, float], targets: set[int], companions: int
 	) -> dict[int, float]:
-		"""Evaluate best-pair cost for iid companions drawn from local shade masses."""
+		"""Evaluate best-pair cost for iid companions drawn from local shade masses.
+
+		Same computation as _conditional_values_loop, done a block of gaps at a time with numpy.
+		The forward/backward recursions are running sums (cumsum, which is sequential), the
+		per-target sums keep the original order, and the gaps are accumulated in order up to
+		the same early stop, so the values are bit-identical.
+		"""
+		items = sorted((shade, mass) for shade, mass in masses.items() if mass > 0)
+		if not items or companions < 1:
+			return self._conditional_values_loop(masses, targets, companions)
+		shades = np.array([shade for shade, mass in items])
+		total = sum(mass for shade, mass in items)
+		weights = np.array([mass / total for shade, mass in items])
+		n = len(items)
+		order = list(targets)
+		target_shades = np.array(order)
+		permutations = math.factorial(companions)
+		totals = np.zeros(len(order))
+		for first_gap in range(7, 65, self.GAP_BLOCK):
+			gaps = np.arange(first_gap, min(65, first_gap + self.GAP_BLOCK))
+			rows = np.arange(len(gaps))[:, None]
+			left = np.searchsorted(shades, shades[None, :] - gaps[:, None], side='right')
+			right = np.searchsorted(shades, shades[None, :] + gaps[:, None], side='left')
+			forward = [np.ones((len(gaps), n + 1))]
+			backward = [np.ones((len(gaps), n + 1))]
+			for _count in range(1, companions + 1):
+				current = np.zeros((len(gaps), n + 1))
+				np.cumsum(weights * forward[-1][rows, left], axis=1, out=current[:, 1:])
+				forward.append(current)
+				current = np.zeros((len(gaps), n + 1))
+				products = weights * backward[-1][rows, right]
+				current[:, :n] = np.cumsum(products[:, ::-1], axis=1)[:, ::-1]
+				backward.append(current)
+
+			li = np.searchsorted(shades, target_shades[None, :] - gaps[:, None], side='right')
+			ri = np.searchsorted(shades, target_shades[None, :] + gaps[:, None], side='left')
+			probability = forward[0][rows, li] * backward[companions][rows, ri]
+			for k in range(1, companions + 1):
+				probability = (
+					probability + forward[k][rows, li] * backward[companions - k][rows, ri]
+				)
+			probability = permutations * probability
+			# The original loop stops after the first gap whose largest probability is < 1e-14.
+			small = np.flatnonzero(probability.max(axis=1) < 1e-14)
+			stop = int(small[0]) + 1 if len(small) else len(gaps)
+			multiplier = np.where(gaps == 7, 7, 1)[:stop, None]
+			totals = np.cumsum(np.vstack((totals, multiplier * probability[:stop])), axis=0)[-1]
+			if len(small):
+				break
+		return dict(zip(order, totals.tolist(), strict=True))
+
+	def _conditional_values_loop(
+		self, masses: dict[int, float], targets: set[int], companions: int
+	) -> dict[int, float]:
+		"""The original implementation, used for the degenerate empty-histogram case."""
 		items = sorted((shade, mass) for shade, mass in masses.items() if mass > 0)
 		shades = tuple(shade for shade, mass in items)
 		total = sum(mass for shade, mass in items)
@@ -243,10 +305,17 @@ class Player4(BasePlayer):
 		return values
 
 	def _observe(self, offered: tuple[int, ...]) -> None:
+		self._stats_cache.clear()
 		for shade in offered:
 			self._samples[is_white(shade)].append(wears(shade))
 
 	def _stats(self, white: bool) -> tuple[float, float]:
+		cached = self._stats_cache.get(white)
+		if cached is None:
+			cached = self._stats_cache[white] = self._compute_stats(white)
+		return cached
+
+	def _compute_stats(self, white: bool) -> tuple[float, float]:
 		values = self._samples[white]
 		if not values:
 			return 0.0, 0.0

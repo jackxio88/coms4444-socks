@@ -45,7 +45,7 @@ class Player1(BasePlayer):
 	MAX_THRESHOLD = 65
 	# use the average of last N calculated threshold as current "smoother" threshold
 	# min is 1,
-	THRESHOLD_AVG_N = 50
+	THRESHOLD_AVG_N = 1
 	SEED = 4444
 
 	"""Rename me to Player<k>, where <k> is your group number."""
@@ -186,13 +186,10 @@ class Player1(BasePlayer):
 		# modulized discard logic
 		# discard is probablistic
 		# but no discard happens after budget runs out
-<<<<<<< HEAD
-		discard_method = self.choose_discard_probablistic_dynamic 
+		discard_method = self.choose_discard_simple
+		# discard_method = self.choose_discard_probablistic_dynamic
 		discard = discard_method(offered, turn, selected_pair) 
-=======
-		discard_method = self.choose_discard_probablistic_dynamic
-		discard = discard_method(offered, turn, selected_pair)
->>>>>>> main
+
 		return Selection(wear=selected_pair, discard=tuple(discard))
 
 	@staticmethod
@@ -340,11 +337,6 @@ class Player1(BasePlayer):
 			default=None,
 		)
 
-<<<<<<< HEAD
-	# calculate a threshold for sock discard policy 
-	# return in number of days, the threshold over which socks need to be discarded 
-	# uses the last N days' threshold for smoothing  
-=======
 		# If nothing is free, return the lowest cost pair, wear score breaks ties.
 		if newest_free is None:
 			cheapest = min(
@@ -365,7 +357,6 @@ class Player1(BasePlayer):
 	# calculate a threshold for sock discard policy
 	# return in number of days, the threshold over which socks need to be discarded
 	# uses the last N days' threshold for smoothing
->>>>>>> main
 	def calculate_discard_threshold(self, turn: TurnContext) -> float:
 		# raw current threshold using remaining day and budget
 		days_left = float(self.days - turn.day)
@@ -374,11 +365,10 @@ class Player1(BasePlayer):
 			if turn.budget_remaining > 0
 			else self.MAX_THRESHOLD
 		)
-		runway_threshold = self.choose_discard_threshold_runway(turn)
-
-		raw_threshold = min(
-			raw_threshold if self.rng.random() < 0.5 else runway_threshold, self.MAX_THRESHOLD
-		)
+		# runway_threshold = self.choose_discard_threshold_runway(turn)
+		# raw_threshold = min(
+		# 	raw_threshold if self.rng.random() < 0.5 else runway_threshold, self.MAX_THRESHOLD
+		# )
 
 		# smoother threshold
 		if len(self.threshold_history) >= self.THRESHOLD_AVG_N:
@@ -388,23 +378,29 @@ class Player1(BasePlayer):
 
 		return max(smooth_threshold, self.MIN_THRESHOLD)
 
-<<<<<<< HEAD
-	# discard sock over thresohld 
-	# with a probability 
-	@DeprecationWarning
-	def _choose_discard_probablistic(
-			self, 
-			offered: tuple[int, ...], 
-			turn: TurnContext, 
-			selected_pair: tuple[int, ...]) -> tuple[int, ...]:
-=======
+	# simply discard all socks over threshold
+	def choose_discard_simple(
+			self, offered: tuple[int, ...], turn: TurnContext, selected_pair: tuple[int, ...]
+		) -> tuple[int, ...]:
+			if self.is_well_clustered(turn):
+				return tuple([])
+	
+			threshold = self.calculate_discard_threshold(turn)
+			discard = []
+			for c in range(len(offered)):
+				if (
+					c not in selected_pair
+					and offered[c] >= threshold
+					and offered[c] <= (255 - threshold * 2)
+				):
+					discard.append(c)
+			return tuple(discard)
+
 	# discard sock over thresohld
 	# with a probability
-	@DeprecationWarning
-	def _choose_discard_probablistic(
+	def choose_discard_probablistic(
 		self, offered: tuple[int, ...], turn: TurnContext, selected_pair: tuple[int, ...]
 	) -> tuple[int, ...]:
->>>>>>> main
 		if self.is_well_clustered(turn):
 			return tuple([])
 
@@ -420,13 +416,8 @@ class Player1(BasePlayer):
 				discard.append(c)
 		return tuple(discard)
 
-<<<<<<< HEAD
-	# calculate a base discard probability based on budget / cost ratio 
-	# base budget calculated using 10 / 6 / 64 * 2 
-=======
 	# calculate a base discard probability based on budget / cost ratio
 	# base budget calculated using 10 / 6 / 64 * 2
->>>>>>> main
 	# base probability found by experiments
 	# linear version
 	def set_base_discard_probability_linear(
@@ -435,27 +426,16 @@ class Player1(BasePlayer):
 		base_budget_per_day: float = 0.052,
 		min_probability: float = 0.25,
 		max_probability: float = 1.0,
-<<<<<<< HEAD
-		k: float = 7 # sensitivity
-=======
 		k: float = 7,  # sensitivity
->>>>>>> main
 	):
 		daily_budget = self.total_budget / (self.roommates * self.days)
 		delta_budget = daily_budget - base_budget_per_day
 		raw_prob = base_proability + k * delta_budget
 
 		# Clamp between min_probability and max_probability
-<<<<<<< HEAD
-		self.dicsard_probability = max(min_probability, min(max_probability, raw_prob))
-
-
-	# calculate a base discard probability based on budget / cost ratio 
-=======
 		self.discard_probability = max(min_probability, min(max_probability, raw_prob))
 
 	# calculate a base discard probability based on budget / cost ratio
->>>>>>> main
 	# sigmoid version
 	def set_base_discard_probability_sigmoid(
 		self,
@@ -463,22 +443,6 @@ class Player1(BasePlayer):
 		base_proability: float = 0.4,
 		min_probability: float = 0.25,
 		max_probability: float = 1.0,
-<<<<<<< HEAD
-		k: float = 5  
-	):
-		daily_budget = self.total_budget / (self.roommates * self.days)
-		if not (min_probability < base_proability < max_probability):
-			raise ValueError("base_proability must strictly lie between min_probability and max_probability.")
-
-		# Calculate shift so that at daily_budget == base_budget_per_day, prob == base_proability
-		shift = math.log((max_probability - base_proability) / (base_proability - min_probability))
-		
-		delta_budget = daily_budget - base_budget_per_day
-		
-		# Sigmoid formula bounded between min_probability and max_probability
-		prob = min_probability + (max_probability - min_probability) / (1.0 + math.exp(-k * delta_budget + shift))
-		self.dicsard_probability = prob
-=======
 		k: float = 5,
 	):
 		daily_budget = self.total_budget / (self.roommates * self.days)
@@ -491,7 +455,6 @@ class Player1(BasePlayer):
 		shift = math.log((max_probability - base_proability) / (base_proability - min_probability))
 
 		delta_budget = daily_budget - base_budget_per_day
->>>>>>> main
 
 		# Sigmoid formula bounded between min_probability and max_probability
 		prob = min_probability + (max_probability - min_probability) / (
@@ -499,18 +462,6 @@ class Player1(BasePlayer):
 		)
 		self.discard_probability = prob
 
-<<<<<<< HEAD
-	# discard policy based on how old the sock is 
-	# the older the sock is (over threshold), the larger the probability of getting discarded
-	# using the base probability set on day 1
-	# and then calculate probability based on how old the sock is 
-	def choose_discard_probablistic_dynamic(
-			self, 
-			offered: tuple[int, ...], 
-			turn: TurnContext, 
-			selected_pair: tuple[int, ...]) -> tuple[int, ...]:
-		if self.is_well_clustered(turn) or turn.budget_remaining <= 0:
-=======
 	# discard policy based on how old the sock is
 	# the older the sock is (over threshold), the larger the probability of getting discarded
 	# using the base probability set on day 1
@@ -519,7 +470,6 @@ class Player1(BasePlayer):
 		self, offered: tuple[int, ...], turn: TurnContext, selected_pair: tuple[int, ...]
 	) -> tuple[int, ...]:
 		if self.is_well_clustered(turn) or turn.budget_remaining < PACK_COST:
->>>>>>> main
 			return tuple([])
 
 		discard = []

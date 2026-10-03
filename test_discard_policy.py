@@ -67,7 +67,6 @@ def run_experiments():
         [400, 28, 4, 730],
         [300, 48, 9, 730],
         [500, 84, 18, 365],
-        [1000, 168, 36, 365],
     ]
 
 
@@ -96,7 +95,8 @@ def run_experiments():
     results = np.array(results)
 
     # calculate average per person embarrasement
-
+    avg_daily_per_person_embarrassement = np.mean(results[:, 8])
+    print(f"avg daily per person embarrasement = {avg_daily_per_person_embarrassement}")
 
 
     np.savetxt(csv_file, 
@@ -105,5 +105,7 @@ def run_experiments():
                delimiter=",",
                header="budget,capacity,roomates,duration,total_embarrassment,total_sockless_days,budget_exhausted_on,budget_remaining,avg_daily_per_person_embarrassement",
             )
+
+    
 
 run_experiments()

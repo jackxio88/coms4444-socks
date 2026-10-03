@@ -45,7 +45,7 @@ class Player1(BasePlayer):
 	MAX_THRESHOLD = 65
 	# use the average of last N calculated threshold as current "smoother" threshold
 	# min is 1,
-	THRESHOLD_AVG_N = 1
+	THRESHOLD_AVG_N = 50
 	SEED = 4444
 
 	"""Rename me to Player<k>, where <k> is your group number."""
@@ -66,7 +66,6 @@ class Player1(BasePlayer):
 		# itself - you cannot preload state into an already-built object. Anything
 		# you want to carry between days lives on self, so initialise it here.
 		self.days_seen = 0
-		self.threshold_history = deque()
 		self.count_discarded_over_threshold = 0
 		self.sum_discarded_over_threshold = 0
 		self.discard_probability = 0.4
@@ -82,6 +81,10 @@ class Player1(BasePlayer):
 		self.white_avg = 255
 		self.white_range = 0
 
+		self.raw_threshold_history = []
+
+		self.experiment_threshold_history = [[0.0 for _ in range(self.days)] for _ in range(4)]
+		
 	def select_socks(self, offered: tuple[int, ...], turn: TurnContext) -> Selection:
 		"""Choose two socks to wear, and decide the fate of the rest.
 
@@ -150,6 +153,8 @@ class Player1(BasePlayer):
 			self.previous_budget = self.total_budget
 		self.days_seen += 1
 
+		
+
 		# num_bought = (self.previous_budget - turn.budget_remaining) / 10
 		# Can somehow use num_bought to widen range
 		self.previous_budget = turn.budget_remaining
@@ -189,6 +194,17 @@ class Player1(BasePlayer):
 		discard_method = self.choose_discard_simple
 		# discard_method = self.choose_discard_probablistic_dynamic
 		discard = discard_method(offered, turn, selected_pair) 
+
+		print(turn.day)
+
+		# last day
+		if turn.day == self.days - 1:
+			print("last day")
+			np.savetxt(f"threshold_history_{id(self)}.csv", 
+					self.experiment_threshold_history, 
+					fmt="%.2f", 
+					delimiter=",",
+				)
 
 		return Selection(wear=selected_pair, discard=tuple(discard))
 
@@ -370,11 +386,23 @@ class Player1(BasePlayer):
 		# 	raw_threshold if self.rng.random() < 0.5 else runway_threshold, self.MAX_THRESHOLD
 		# )
 
-		# smoother threshold
-		if len(self.threshold_history) >= self.THRESHOLD_AVG_N:
-			self.threshold_history.popleft()
-		self.threshold_history.append(raw_threshold)
-		smooth_threshold = np.mean(np.array(self.threshold_history))
+
+		self.raw_threshold_history.append(raw_threshold)
+
+		if len(self.raw_threshold_history) >= 1 and turn.budget_remaining > 0:
+			self.experiment_threshold_history[0][turn.day] = \
+					self.raw_threshold_history[-1]
+				
+			self.experiment_threshold_history[1][turn.day] = \
+				np.mean(np.array(self.raw_threshold_history)[-20:])
+			
+			self.experiment_threshold_history[2][turn.day] = \
+				np.mean(np.array(self.raw_threshold_history)[-40:])
+			
+			self.experiment_threshold_history[3][turn.day] = \
+				np.mean(np.array(self.raw_threshold_history)[-80:])
+
+		smooth_threshold = np.mean(np.array(self.raw_threshold_history)[-1 * self.THRESHOLD_AVG_N:])
 
 		return max(smooth_threshold, self.MIN_THRESHOLD)
 
